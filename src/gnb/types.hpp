@@ -99,6 +99,8 @@ struct NgapAmfContext
     std::string address{};
     uint16_t port{};
     std::string amfName{};
+    std::string pendingNgSetupChallenge{};
+    bool ngSetupAuthPassed{};
     int64_t relativeCapacity{};
     EAmfState state{};
     OverloadInfo overloadInfo{};
@@ -314,6 +316,8 @@ struct GnbConfig
     std::string gtpIp{};
     std::optional<std::string> gtpAdvertiseIp{};
     bool ignoreStreamIds{};
+    bool ngSetupAuthEnabled{};
+    bool ngSetupAuthStrict{true};
 
     /* Assigned by program */
     std::string name{};
