@@ -56,6 +56,12 @@ static nr::gnb::GnbConfig *ReadConfigYaml()
         result->gtpAdvertiseIp = yaml::GetIpAddress(config, "gtpAdvertiseIp");
 
     result->ignoreStreamIds = yaml::GetBool(config, "ignoreStreamIds");
+    result->ngSetupAuthEnabled = yaml::HasField(config, "ngSetupAuthEnabled")
+                                    ? yaml::GetBool(config, "ngSetupAuthEnabled")
+                                    : false;
+    result->ngSetupAuthStrict = yaml::HasField(config, "ngSetupAuthStrict")
+                                   ? yaml::GetBool(config, "ngSetupAuthStrict")
+                                   : true;
     result->pagingDrx = EPagingDrx::V128;
     result->name = "UERANSIM-gnb-" + std::to_string(result->plmn.mcc) + "-" + std::to_string(result->plmn.mnc) + "-" +
                    std::to_string(result->getGnbId()); // NOTE: Avoid using "/" dir separator character.

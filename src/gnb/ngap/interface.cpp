@@ -10,6 +10,11 @@
 #include "utils.hpp"
 
 #include <algorithm>
+#include <cctype>
+#include <iomanip>
+#include <sstream>
+
+#include <utils/random.hpp>
 
 #include <gnb/app/task.hpp>
 #include <gnb/rrc/task.hpp>
@@ -33,6 +38,52 @@
 
 namespace nr::gnb
 {
+
+static constexpr const char *kNgSetupAuthChalPrefix = "AUTH_CHAL:";
+static constexpr const char *kNgSetupAuthRespPrefix = "AUTH_RESP:";
+static constexpr const char *kNgSetupAuthPassword = "open5gs-amf-gnb-secret";
+
+static uint32_t OgHashDefault(const std::string &input)
+{
+    uint32_t hash = 5381;
+    for (unsigned char c : input)
+        hash = ((hash << 5) + hash) + c;
+    return hash;
+}
+
+static uint32_t ComputeExpectedAuthResponse(const std::string &challenge)
+{
+    return OgHashDefault(kNgSetupAuthPassword) ^ OgHashDefault(challenge);
+}
+
+static std::string ToLowerHex8(uint32_t value)
+{
+    std::ostringstream stream;
+    stream << std::hex << std::nouppercase << std::setfill('0') << std::setw(8) << value;
+    return stream.str();
+}
+
+static std::string GenerateNgSetupChallenge()
+{
+    Random random{};
+    return ToLowerHex8(random.nextUI()) + ToLowerHex8(random.nextUI());
+}
+
+static std::optional<std::string> TryExtractAuthResponseHex(const std::string &amfName)
+{
+    auto index = amfName.rfind(kNgSetupAuthRespPrefix);
+    if (index == std::string::npos)
+        return {};
+
+    auto responseHex = amfName.substr(index + std::string{kNgSetupAuthRespPrefix}.size());
+    if (responseHex.size() != 8)
+        return {};
+    if (!std::all_of(responseHex.begin(), responseHex.end(), [](char c) { return std::isxdigit(c) != 0; }))
+        return {};
+    std::transform(responseHex.begin(), responseHex.end(), responseHex.begin(),
+                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    return responseHex;
+}
 
 template <typename T>
 static void AssignDefaultAmfConfigs(NgapAmfContext *amf, T *msg)
@@ -115,6 +166,7 @@ void NgapTask::sendNgSetupRequest(int amfId)
         return;
 
     amf->state = EAmfState::WAITING_NG_SETUP;
+    amf->ngSetupAuthPassed = false;
 
     // TODO: this procedure also re-initialises the NGAP UE-related contexts (if any)
     //  and erases all related signalling connections in the two nodes like an NG Reset procedure would do.
@@ -139,7 +191,15 @@ void NgapTask::sendNgSetupRequest(int amfId)
     ieRanNodeName->id = ASN_NGAP_ProtocolIE_ID_id_RANNodeName;
     ieRanNodeName->criticality = ASN_NGAP_Criticality_ignore;
     ieRanNodeName->value.present = ASN_NGAP_NGSetupRequestIEs__value_PR_RANNodeName;
-    asn::SetPrintableString(ieRanNodeName->value.choice.RANNodeName, m_base->config->name);
+    amf->pendingNgSetupChallenge.clear();
+    std::string ranNodeName = m_base->config->name;
+    if (m_base->config->ngSetupAuthEnabled)
+    {
+        amf->pendingNgSetupChallenge = GenerateNgSetupChallenge();
+        ranNodeName = std::string{kNgSetupAuthChalPrefix} + amf->pendingNgSetupChallenge;
+        m_logger->debug("NG Setup auth challenge generated for AMF[%d]", amfId);
+    }
+    asn::SetPrintableString(ieRanNodeName->value.choice.RANNodeName, ranNodeName);
 
     auto *broadcastPlmn = asn::New<ASN_NGAP_BroadcastPLMNItem>();
     asn::SetOctetString3(broadcastPlmn->pLMNIdentity, ngap_utils::PlmnToOctet3(m_base->config->plmn));
@@ -186,6 +246,28 @@ void NgapTask::receiveNgSetupResponse(int amfId, ASN_NGAP_NGSetupResponse *msg)
         return;
 
     AssignDefaultAmfConfigs(amf, msg);
+
+    if (m_base->config->ngSetupAuthEnabled)
+    {
+        auto authResp = TryExtractAuthResponseHex(amf->amfName);
+        auto expectedHex = ToLowerHex8(ComputeExpectedAuthResponse(amf->pendingNgSetupChallenge));
+        bool authenticated = authResp.has_value() && authResp.value() == expectedHex;
+        amf->ngSetupAuthPassed = authenticated;
+        if (!authenticated)
+        {
+            m_logger->err("NG Setup auth validation failed for AMF[%d]", amfId);
+            if (m_base->config->ngSetupAuthStrict)
+            {
+                amf->state = EAmfState::WAITING_NG_SETUP;
+                return;
+            }
+            m_logger->warn("Proceeding despite NG Setup auth mismatch (ngSetupAuthStrict=false)");
+        }
+        else
+        {
+            m_logger->info("NG Setup auth validation successful for AMF[%d]", amfId);
+        }
+    }
 
     amf->state = EAmfState::CONNECTED;
     m_logger->info("NG Setup procedure is successful");

@@ -31,6 +31,8 @@ Json ToJson(const GnbConfig &v)
         {"gtp-ip", v.gtpIp},
         {"paging-drx", ToJson(v.pagingDrx)},
         {"ignore-sctp-id", v.ignoreStreamIds},
+        {"ng-setup-auth-enabled", v.ngSetupAuthEnabled},
+        {"ng-setup-auth-strict", v.ngSetupAuthStrict},
     });
 }
 
@@ -44,6 +46,7 @@ Json ToJson(const NgapAmfContext &v)
         {"name", v.amfName},
         {"address", address + ":" + std::to_string(v.port)},
         {"state", ToJson(v.state).str()},
+        {"ng-setup-auth-passed", v.ngSetupAuthPassed},
         {"capacity", v.relativeCapacity},
         {"association", ToJson(v.association)},
         {"served-guami", ::ToJson(v.servedGuamiList)},
